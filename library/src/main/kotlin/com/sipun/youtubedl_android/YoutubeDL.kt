@@ -66,9 +66,10 @@ object YoutubeDL {
             val ffprobePath = nativeFfprobePath
             // Prefer the native toolchains' bundled dependencies when ffmpeg/aria2
             // are spawned, then expose Python's runtime libraries as a fallback.
-            ENV_LD_LIBRARY_PATH = ffmpegDir.absolutePath + "/usr/lib" + ":" +
-                    aria2cDir.absolutePath + "/usr/lib" + ":" +
-                    pythonDir.absolutePath + "/usr/lib"
+            // Python first: its native extensions must resolve against their own runtime libraries.
+            ENV_LD_LIBRARY_PATH = pythonDir.absolutePath + "/usr/lib" + ":" +
+                    ffmpegDir.absolutePath + "/usr/lib" + ":" +
+                    aria2cDir.absolutePath + "/usr/lib"
             ENV_SSL_CERT_FILE = pythonDir.absolutePath + "/usr/etc/tls/cert.pem"
             ENV_OPENSSL_CONF = pythonDir.absolutePath + "/usr/etc/tls/openssl.cnf"
             ENV_OPENSSL_MODULES = pythonDir.absolutePath + "/usr/lib/ossl-modules"
