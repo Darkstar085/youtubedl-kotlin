@@ -94,7 +94,7 @@ BOOTSTRAP_LOG="$PREFIX/tmp/youtubedl-bootstrap.log"
 : > "$BOOTSTRAP_LOG"
 command -v pkg >/dev/null 2>&1 || die "Termux pkg command is missing; repair the Termux package manager first."
 command -v apt-get >/dev/null 2>&1 || die "Termux apt-get is missing; repair the Termux package manager first."
-SCRIPT_COMMANDS=(curl zip unzip readelf dpkg-deb dpkg-query apt-cache apt-get awk find grep install readlink mktemp basename)
+SCRIPT_COMMANDS=(curl zip unzip readelf dpkg-deb dpkg-query apt-cache apt-get awk find grep install readlink mktemp basename pkg-config)
 MISSING_PACKAGES=()
 for cmd in "${SCRIPT_COMMANDS[@]}"; do
   command -v "$cmd" >/dev/null 2>&1 && continue
@@ -109,6 +109,7 @@ for cmd in "${SCRIPT_COMMANDS[@]}"; do
     find) package="findutils" ;;
     grep) package="grep" ;;
     install|readlink|mktemp|basename) package="coreutils" ;;
+    pkg-config) package="pkg-config" ;;
     *) die "No Termux package mapping is defined for missing command: $cmd" ;;
   esac
   found=0
@@ -149,7 +150,7 @@ else
   log "WARNING: apt-get update returned a non-zero status; continuing with cached package indexes."
 fi
 log "Checking repository candidate versions"
-for component in python python-pycryptodomex quickjs-ng openssl libandroid-support zlib ffmpeg aria2; do
+for component in python python-pycryptodomex quickjs-ng openssl libandroid-support libffi zlib ffmpeg aria2; do
   log "Checking $component"
   candidate="$(apt-cache policy "$component" 2>/dev/null | awk '/Candidate:/ { print $2; exit }' || true)"
   previous="$(manifest_version arm64-v8a "$component")"
@@ -162,7 +163,7 @@ for component in python python-pycryptodomex quickjs-ng openssl libandroid-suppo
   fi
 done
 log "Reinstalling required Termux runtime packages without interactive prompts"
-if ! apt-get install --reinstall -y python python-pycryptodomex quickjs-ng openssl libandroid-support zlib ffmpeg aria2 >>"$BOOTSTRAP_LOG" 2>&1; then
+if ! apt-get install --reinstall -y python python-pycryptodomex quickjs-ng openssl libandroid-support libffi zlib ffmpeg aria2 >>"$BOOTSTRAP_LOG" 2>&1; then
   tail -n 30 "$BOOTSTRAP_LOG" >&2 || true
   die "Termux runtime package reinstall failed."
 fi
@@ -237,6 +238,41 @@ if compgen -G "$WORK/debs/*.deb" >/dev/null; then
 else
   log "No new package archives produced; continuing with installed Termux packages."
 fi
+log "Installing Android-compatible curl-cffi and its native CFFI backend"
+CURL_CFFI_VERSION="0.17.0"
+CFFI_VERSION="2.1.1"
+PYC_PARSER_VERSION="3.12"
+CERTIFI_VERSION="2026.10.23"
+PYTHON_VERSION="$("$PREFIX/bin/python3" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+case "$PYTHON_VERSION" in
+  3.14)
+    CURL_CFFI_TAG="cp314-cp314"
+    CURL_CFFI_SHA256="0d85bec9648bf7c14c3b43056ba82521740f72cd96ed7700a0e1973e7fc93f74"
+    ;;
+  3.15)
+    CURL_CFFI_TAG="cp315-cp315"
+    CURL_CFFI_SHA256="918a493717da703bc10507b811e347f4ad94132e30c6709fc1e85daf79979565"
+    ;;
+  *)
+    die "No verified curl-cffi Android wheel is pinned for CPython $PYTHON_VERSION."
+    ;;
+esac
+CURL_CFFI_WHEEL="curl_cffi-${CURL_CFFI_VERSION}-${CURL_CFFI_TAG}-android_24_arm64_v8a.whl"
+CURL_CFFI_URL="https://github.com/lexiforest/curl_cffi/releases/download/v${CURL_CFFI_VERSION}/${CURL_CFFI_WHEEL}"
+HOST_PYLIB="$(find "$PREFIX/lib" -maxdepth 1 -type d -name 'python3.*' -print -quit)"
+[[ -n "$HOST_PYLIB" ]] || die "Python runtime directory was not found."
+HOST_SITE="$HOST_PYLIB/site-packages"
+mkdir -p "$HOST_SITE"
+pkg-config --exists libffi || die "libffi development files are missing; cannot build the CFFI backend."
+curl --fail --silent --show-error --location --retry 3 "$CURL_CFFI_URL" -o "$WORK/$CURL_CFFI_WHEEL"
+echo "$CURL_CFFI_SHA256  $WORK/$CURL_CFFI_WHEEL" | sha256sum -c --quiet - || die "curl-cffi Android wheel SHA-256 verification failed."
+unzip -q -o "$WORK/$CURL_CFFI_WHEEL" -d "$HOST_SITE"
+"$PREFIX/bin/python3" -m pip install --disable-pip-version-check --no-compile --upgrade --target "$HOST_SITE" "certifi==$CERTIFI_VERSION"
+"$PREFIX/bin/python3" -m pip install --disable-pip-version-check --no-compile --upgrade --no-binary=cffi --target "$HOST_SITE" "cffi==$CFFI_VERSION" "pycparser==$PYC_PARSER_VERSION"
+CURL_CFFI_BACKEND="$(find "$HOST_SITE/curl_cffi" -maxdepth 1 -type f -name '_wrapper*.so' -print -quit)"
+CFFI_BACKEND="$(find "$HOST_SITE" -maxdepth 1 -type f -name '_cffi_backend*.so' -print -quit)"
+[[ -n "$CURL_CFFI_BACKEND" && -n "$CFFI_BACKEND" && -d "$HOST_SITE/curl_cffi.libs" ]] || die "curl-cffi or its native CFFI backend is missing from site-packages."
+PYTHONPATH="$HOST_SITE" "$PREFIX/bin/python3" -c 'import certifi, cffi, curl_cffi; from curl_cffi import Curl; client = Curl(); client.close(); print(curl_cffi.__version__, cffi.__version__, certifi.__version__)' || die "curl-cffi native import smoke test failed."
 log "Assembling Python runtime archive and ELF dependencies"
 python3 .github/scripts/assemble-python-runtime.py "$PREFIX" "$WORK/stage"
 log "Bundling OpenSSL provider modules for standalone runtime"
@@ -247,13 +283,18 @@ SITE="$(find "$PYLIB" -maxdepth 4 -type d -name site-packages -print -quit)"
 "$PREFIX/bin/python3" -m pip install --disable-pip-version-check --no-compile --no-deps --target "$SITE" mutagen
 MUTAGEN_VERSION="$(PYTHONPATH="$SITE" "$PREFIX/bin/python3" -c 'import mutagen; print(mutagen.version_string)')"
 PYTHON_RUNTIME_CHANGED=0
-for component in python python-pycryptodomex quickjs-ng openssl libandroid-support zlib; do
+for component in python python-pycryptodomex quickjs-ng openssl libandroid-support libffi zlib; do
   if runtime_version_changed "$component" "$component"; then
     PYTHON_RUNTIME_CHANGED=1
   fi
 done
 PREVIOUS_MUTAGEN_VERSION="$(manifest_version arm64-v8a mutagen)"
 [[ "$MUTAGEN_VERSION" == "$PREVIOUS_MUTAGEN_VERSION" ]] || PYTHON_RUNTIME_CHANGED=1
+for component in cffi curl-cffi certifi pycparser; do
+  current="$("$PREFIX/bin/python3" -c 'import importlib.metadata,sys; print(importlib.metadata.version(sys.argv[1]))' "$component")"
+  previous="$(manifest_version arm64-v8a "$component")"
+  [[ "$current" == "$previous" ]] || PYTHON_RUNTIME_CHANGED=1
+done
 for artifact in library/src/main/jniLibs/arm64-v8a/libpython.so library/src/main/jniLibs/arm64-v8a/libpython.zip.so library/src/main/jniLibs/arm64-v8a/libqjs.so; do
   [[ -f "$artifact" ]] || PYTHON_RUNTIME_CHANGED=1
 done
@@ -331,6 +372,10 @@ if grep -Eq '^usr/lib/lib(crypto|ssl)\.so$' "$ARCHIVE_LIST"; then
   die "Python runtime archive contains an unversioned OpenSSL alias that may shadow Android system libraries."
 fi
 grep -Fxq 'usr/lib/ossl-modules/legacy.so' "$ARCHIVE_LIST" || die "Python runtime archive lacks OpenSSL legacy provider."
+grep -Eq '^usr/lib/python3\.[0-9]+/site-packages/curl_cffi/_wrapper.*\.so$' "$ARCHIVE_LIST" || die "Python runtime archive lacks the curl-cffi Android extension."
+grep -Eq '^usr/lib/python3\.[0-9]+/site-packages/_cffi_backend.*\.so$' "$ARCHIVE_LIST" || die "Python runtime archive lacks the native CFFI backend."
+grep -Eq '^usr/lib/python3\.[0-9]+/site-packages/curl_cffi\.libs/.*\.so$' "$ARCHIVE_LIST" || die "Python runtime archive lacks curl-cffi's bundled native libraries."
+grep -Eq '^usr/lib/libffi\.so' "$ARCHIVE_LIST" || die "Python runtime archive lacks libffi required by CFFI."
 grep -Fxq 'usr/etc/tls/openssl.cnf' "$ARCHIVE_LIST" || die "Python runtime archive lacks OpenSSL configuration."
 for archive in \
   ffmpeg/src/main/jniLibs/arm64-v8a/libffmpeg.zip.so \
@@ -358,7 +403,12 @@ mkdir -p "$RUNTIME_METADATA_DIR"
   printf 'arm64-v8a\taria2\t%s\n' "$(dpkg-query -W -f='${Version}' aria2)"
   printf 'arm64-v8a\topenssl\t%s\n' "$(dpkg-query -W -f='${Version}' openssl)"
   printf 'arm64-v8a\tlibandroid-support\t%s\n' "$(dpkg-query -W -f='${Version}' libandroid-support)"
+  printf 'arm64-v8a\tlibffi\t%s\n' "$(dpkg-query -W -f='${Version}' libffi)"
   printf 'arm64-v8a\tzlib\t%s\n' "$(dpkg-query -W -f='${Version}' zlib)"
+  printf 'arm64-v8a\tcertifi\t%s\n' "$("$PREFIX/bin/python3" -c 'import certifi; print(certifi.__version__)')"
+  printf 'arm64-v8a\tcffi\t%s\n' "$("$PREFIX/bin/python3" -c 'import cffi; print(cffi.__version__)')"
+  printf 'arm64-v8a\tcurl-cffi\t%s\n' "$("$PREFIX/bin/python3" -c 'import curl_cffi; print(curl_cffi.__version__)')"
+  printf 'arm64-v8a\tpycparser\t%s\n' "$("$PREFIX/bin/python3" -c 'import pycparser; print(pycparser.__version__)')"
   printf 'arm64-v8a\tmutagen\t%s\n' "$MUTAGEN_VERSION"
 } > "$RUNTIME_METADATA_DIR/arm64-v8a.tsv"
 python3 .github/scripts/update-runtime-versions.py --manifest runtime-versions.tsv --artifacts-dir "$RUNTIME_METADATA_DIR" --ytdlp library/src/main/res/raw/ytdlp --description-file "$WORK/version-description.txt"

@@ -90,6 +90,9 @@ Aria2c.init(this)
 For aria2 downloads, pass yt-dlp's external-downloader options in the request as required by your
 use case.
 
+The Python runtime also bundles Android-compatible `curl-cffi` and its native CFFI backend. yt-dlp
+can use it for browser impersonation when a request includes the `--impersonate` option.
+
 ## Compose demo
 
 The repository includes a small Jetpack Compose app to test the library without Maven publishing.
@@ -167,10 +170,15 @@ complete tab-separated inventory is maintained in [runtime-versions.tsv](runtime
 | --- | --- | --- |
 | all | yt-dlp | 2026.10.26 |
 | arm64-v8a | aria2 | 1.37.0-3 |
+| arm64-v8a | certifi | 2026.10.23 |
+| arm64-v8a | cffi | 2.1.1 |
+| arm64-v8a | curl-cffi | 0.17.0 |
 | arm64-v8a | ffmpeg | 9.0.2-1 |
 | arm64-v8a | libandroid-support | 29-1 |
+| arm64-v8a | libffi | 3.8.0 |
 | arm64-v8a | mutagen | 1.48.1 |
 | arm64-v8a | openssl | 1:3.6.5 |
+| arm64-v8a | pycparser | 3.12 |
 | arm64-v8a | python | 3.14.8 |
 | arm64-v8a | python-pycryptodomex | 3.24.1 |
 | arm64-v8a | quickjs-ng | 0.18.0 |
