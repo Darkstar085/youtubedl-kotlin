@@ -148,10 +148,10 @@ Then add the modules your app uses:
 
 ```kotlin
 dependencies {
-    implementation("io.github.darkstar085.youtubedl-kotlin:library:1.0.0")
+    implementation("io.github.darkstar085.youtubedl-kotlin:library:1.0.2")
     // Optional:
-    implementation("io.github.darkstar085.youtubedl-kotlin:ffmpeg:1.0.0")
-    implementation("io.github.darkstar085.youtubedl-kotlin:aria2c:1.0.0")
+    implementation("io.github.darkstar085.youtubedl-kotlin:ffmpeg:1.0.2")
+    implementation("io.github.darkstar085.youtubedl-kotlin:aria2c:1.0.2")
 }
 ```
 

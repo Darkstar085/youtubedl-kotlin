@@ -14,8 +14,8 @@ android {
             abiFilters += setOf("arm64-v8a")
         }
         targetSdk = 37
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "1.0.2"
     }
 
     packaging {
